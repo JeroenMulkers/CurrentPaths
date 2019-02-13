@@ -120,7 +120,7 @@ class Poisson():
         plt.imshow(self.sigma,origin='lower',extent=self.extent)
         plt.show()
 
-    def showCurrent(self):
+    def showCurrent(self,quiverColor=None,streamplotColor=None):
         jx,jy = self.calcCurrent()
         j     = np.sqrt(jx**2+jy**2)
 
@@ -135,7 +135,10 @@ class Poisson():
         plt.figure(figsize=(10,10))
         plt.grid(False)
         plt.imshow(j,cmap=cmap,vmin=0,origin='lower',extent=self.extent)
-        plt.quiver(self.xgrid,self.ygrid,jx,jy)
+        if streamplotColor:
+            plt.streamplot(self.xgrid,self.ygrid,jx,jy,color=streamplotColor,linewidth=1)
+        if quiverColor:
+            plt.quiver(self.xgrid,self.ygrid,jx,jy,color=quiverColor)
         plt.show()
 
 
