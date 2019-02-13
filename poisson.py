@@ -115,6 +115,8 @@ class Poisson():
         pass
 
     def showSigma(self):
+        plt.figure(figsize=(10,10))
+        plt.grid(False)
         plt.imshow(self.sigma,origin='lower',extent=self.extent)
         plt.show()
 
@@ -131,6 +133,7 @@ class Poisson():
         cmap.set_bad('gray',0.8)
         
         plt.figure(figsize=(10,10))
+        plt.grid(False)
         plt.imshow(j,cmap=cmap,vmin=0,origin='lower',extent=self.extent)
         plt.quiver(self.xgrid,self.ygrid,jx,jy)
         plt.show()
