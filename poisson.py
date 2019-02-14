@@ -19,20 +19,20 @@ class Poisson():
         x = np.linspace(xrange[0]+self.dx/2,xrange[1]-self.dx/2,nx)
         y = np.linspace(yrange[0]+self.dy/2,yrange[1]-self.dy/2,ny)
         self.xgrid, self.ygrid = np.meshgrid(x,y)
-        self.sigma = sigma*np.ones((nx,ny))
-        self.pot = np.nan*np.ones((nx,ny))
+        self.sigma = sigma*np.ones((ny,nx))
+        self.pot = np.nan*np.ones((ny,nx))
 
     def setPotential(self,U,regionFunc):
         for ix in range(self.nx):
             for iy in range(self.ny):
-                if regionFunc(self.xgrid[ix,iy],self.ygrid[ix,iy]):
-                    self.pot[ix,iy] = U
+                if regionFunc(self.xgrid[iy,ix],self.ygrid[iy,ix]):
+                    self.pot[iy,ix] = U
                     
     def setSigma(self,sigma,regionFunc=lambda x,y: True):
         for ix in range(self.nx):
             for iy in range(self.ny):
-                if regionFunc(self.xgrid[ix,iy],self.ygrid[ix,iy]):
-                    self.sigma[ix,iy] = sigma
+                if regionFunc(self.xgrid[iy,ix],self.ygrid[iy,ix]):
+                    self.sigma[iy,ix] = sigma
 
     def calcPotential(self):
 
@@ -79,7 +79,7 @@ class Poisson():
         
         # solve the system of equations
         phi_RAW = spsolve(Coef.tocsr(),rhs)
-        phi = phi_RAW.reshape(nx,ny)
+        phi = phi_RAW.reshape(ny,nx)
 
         return phi
 
