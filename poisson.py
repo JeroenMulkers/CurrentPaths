@@ -1,55 +1,79 @@
+import time
 import numpy as np
-from scipy.ndimage import shift
+import matplotlib.pyplot as plt
 from scipy.sparse import lil_matrix
 from scipy.sparse.linalg import spsolve
-import matplotlib.pyplot as plt
-import time
 
-def geomMean(a,b):
-    a,b = np.abs(a),np.abs(b)
-    return np.sqrt(a*b)
 
 class Poisson():
 
-    def __init__(self, nx, ny, xrange=[0.,1.], yrange=[0.,1.], sigma=0):
-        self.nx = nx
-        self.ny = ny
-        self.dx = (xrange[1]-xrange[0])/nx
-        self.dy = (yrange[1]-yrange[0])/ny
-        self.extent = [xrange[0],xrange[1],yrange[0],yrange[1]]
-        x = np.linspace(xrange[0]+self.dx/2,xrange[1]-self.dx/2,nx)
-        y = np.linspace(yrange[0]+self.dy/2,yrange[1]-self.dy/2,ny)
-        self.xgrid, self.ygrid = np.meshgrid(x,y)
-        self.sigma = sigma*np.ones((ny,nx))
-        self.pot = np.nan*np.ones((ny,nx))
+    """ Describes a generalized Poisson problem and solves the problem """
 
-    def setPotential(self,U,regionFunc):
+    def __init__(self, gridsize, xrange=[0.,1.], yrange=[0.,1.], conductivity=np.array([[0,0],[0,0]])):
+
+        self.nx = gridsize[0]
+        self.ny = gridsize[1]
+        self.dx = (xrange[1]-xrange[0])/self.nx
+        self.dy = (yrange[1]-yrange[0])/self.ny
+        self.extent = [xrange[0],xrange[1],yrange[0],yrange[1]]
+        x = np.linspace(xrange[0]+self.dx/2,xrange[1]-self.dx/2,self.nx)
+        y = np.linspace(yrange[0]+self.dy/2,yrange[1]-self.dy/2,self.ny)
+        self.xgrid, self.ygrid = np.meshgrid(x,y)
+
+        self.conductivity = np.zeros((self.ny,self.nx,2,2))
+        self.conductivity[:,:] = conductivity
+        self.pot = np.nan*np.ones((self.ny,self.nx))
+
+
+    def __setRegionValue(self, field, value, regionFunc):
         for ix in range(self.nx):
             for iy in range(self.ny):
-                if regionFunc(self.xgrid[iy,ix],self.ygrid[iy,ix]):
-                    self.pot[iy,ix] = U
-                    
-    def setSigma(self,sigma,regionFunc=lambda x,y: True):
-        for ix in range(self.nx):
-            for iy in range(self.ny):
-                if regionFunc(self.xgrid[iy,ix],self.ygrid[iy,ix]):
-                    self.sigma[iy,ix] = sigma
+                if regionFunc(self.xgrid[iy,ix], self.ygrid[iy,ix]):
+                    field[iy,ix] = value
+
+
+    def setPotential(self, U, regionFunc):
+        self.__setRegionValue(self.pot, U, regionFunc)
+
+
+    def setConductivity(self, conductivity, regionFunc=lambda x,y: True):
+        self.__setRegionValue(self.conductivity, conductivity, regionFunc)
+
+
+    def isAnisotropic(self):
+        xyNonZero = np.count_nonzero(self.conductivity[:,:,0,1]) > 0 
+        yxNonZero = np.count_nonzero(self.conductivity[:,:,1,0]) > 0 
+        return xyNonZero or yxNonZero
+
+
+    def conductivityBetween(self,ixa,iya,ixb,iyb):
+        """ Mixed arithmetic and geometric average 
+            This average is designed to have the following properties
+            - works for mixed signs of a and b 
+            - avg(a,b) = avg(b,a)
+            - min(a,b) < avg(a,b) < max(a,b)
+            - avg(a,b) -> 0 if a -> -b
+            - avg(a,b) -> 0 if a -> 0 or b -> 0
+        """
+        Ca = self.conductivity[iya,ixa]
+        Cb = self.conductivity[iyb,ixb]
+        return np.sign(Ca+Cb)*np.sqrt(0.5*np.abs(Ca+Cb)*np.sqrt(np.abs(Ca*Cb)))
+
 
     def calcPotential(self):
 
+        isAnisotropic = self.isAnisotropic() # avoid checking it every time
         nx,ny = self.nx,self.ny
-        N = nx*ny
-        sigma = self.sigma
+        Ncells = nx*ny
         
         # loop over all cells to construct system of equations
-
-        Coef = lil_matrix((N,N))
-        rhs = np.zeros(N)
-
+        Coef = lil_matrix((Ncells,Ncells))
+        rhs = np.zeros(Ncells)
         for iy in range(ny):
             for ix in range(nx):
 
                 I = iy*nx+ix # vectorized index
+                ID = lambda x,y: (iy+y)*nx+(ix+x)
 
                 # set Dirichlet BC on cells with a not nan potential
                 if not np.isnan(self.pot[iy,ix]):
@@ -58,206 +82,88 @@ class Poisson():
                     continue
 
                 # don't calculate the potential in isolator regions
-                if sigma[iy,ix] == 0.0:
+                if np.count_nonzero(self.conductivity[iy,ix]) == 0:
                     Coef[I,I] = 1
                     continue
 
-                
-                # loop over neighbours
-                for ix_,iy_ in [ (ix-1,iy), (ix+1,iy), (ix,iy-1), (ix,iy+1) ]:
-
-                    # check if neighbor exists
-                    if ix_ >= 0 and iy_ >= 0 and ix_ < nx and iy_ < ny: 
-
-                        I_ = iy_*nx+ix_ # vectorized index of neighbor
-
-                        h = abs(ix-ix_)*self.dx + abs(iy-iy_)*self.dy 
-
-                        sigma_ = geomMean(sigma[iy,ix], sigma[iy_,ix_]) 
-
-                        Coef[I,I]  -= sigma_/h**2
-                        Coef[I,I_] += sigma_/h**2
-        
-        # solve the system of equations
-        phi_RAW = spsolve(Coef.tocsr(),rhs)
-        phi = phi_RAW.reshape(ny,nx)
-
-        return phi
-
-    def calcCurrent(self):
-        sigma = self.sigma
-        phi = self.calcPotential()
-        jx = 0*sigma
-        jy = 0*sigma
-    
-        shft = [1,0]
-        sigma_ = geomMean(sigma, shift(sigma,shft))
-        dphi_ = phi - shift(phi,shft)
-        jy += sigma_*dphi_
-    
-        shft = [-1,0]
-        sigma_ = geomMean(sigma, shift(sigma,shft))
-        dphi_ = phi - shift(phi,shft)
-        jy -= sigma_*dphi_
-    
-        shft = [0,1]
-        sigma_ = geomMean(sigma, shift(sigma,shft))
-        dphi_ = phi - shift(phi,shft)
-        jx += sigma_*dphi_
-    
-        shft = [0,-1]
-        sigma_ = geomMean(sigma, shift(sigma,shft))
-        dphi_ = phi - shift(phi,shft)
-        jx -= sigma_*dphi_
-    
-        return jx,jy
-
-    def showPotential(self):
-        pass
-
-    def showSigma(self):
-        plt.figure(figsize=(10,10))
-        plt.grid(False)
-        plt.imshow(self.sigma,origin='lower',extent=self.extent)
-        plt.show()
-
-    def showCurrent(self,quiverColor=None,streamplotColor=None):
-        jx,jy = self.calcCurrent()
-        j     = np.sqrt(jx**2+jy**2)
-
-        appliedPotRegion = np.logical_not(np.isnan(self.pot))
-        j[appliedPotRegion] = np.nan
-        jx[appliedPotRegion] = np.nan
-        jy[appliedPotRegion] = np.nan
-
-        cmap = plt.cm.magma
-        cmap.set_bad('gray',0.8)
-        
-        plt.figure(figsize=(10,10))
-        plt.grid(False)
-        plt.imshow(j,cmap=cmap,vmin=0,origin='lower',extent=self.extent)
-        if streamplotColor:
-            plt.streamplot(self.xgrid,self.ygrid,jx,jy,color=streamplotColor,linewidth=1)
-        if quiverColor:
-            plt.quiver(self.xgrid,self.ygrid,jx,jy,color=quiverColor)
-        plt.show()
-
-
-class PoissonAnisotropic():
-
-    ############################################################################
-
-    def __init__(self, nx, ny, xrange=[0.,1.], yrange=[0.,1.], sigma=[0,0,0,0]):
-        self.nx = nx
-        self.ny = ny
-        self.dx = (xrange[1]-xrange[0])/nx
-        self.dy = (yrange[1]-yrange[0])/ny
-        self.extent = [xrange[0],xrange[1],yrange[0],yrange[1]]
-        x = np.linspace(xrange[0]+self.dx/2,xrange[1]-self.dx/2,nx)
-        y = np.linspace(yrange[0]+self.dy/2,yrange[1]-self.dy/2,ny)
-        self.xgrid, self.ygrid = np.meshgrid(x,y)
-        self.sigma = np.zeros((ny,nx,4))
-        self.sigma[:,:,0:4] = sigma
-        self.pot = np.nan*np.ones((ny,nx))
-        self.phi = None
-
-    ############################################################################
-
-    def setPotential(self,U,regionFunc):
-        for ix in range(self.nx):
-            for iy in range(self.ny):
-                if regionFunc(self.xgrid[iy,ix],self.ygrid[iy,ix]):
-                    self.pot[iy,ix] = U
-                    
-    ############################################################################
-
-    def setSigma(self,sigma,regionFunc=lambda x,y: True):
-        for ix in range(self.nx):
-            for iy in range(self.ny):
-                if regionFunc(self.xgrid[iy,ix],self.ygrid[iy,ix]):
-                    self.sigma[iy,ix] = sigma
-
-    ############################################################################
-
-    def calcPotential(self):
-
-        nx,ny = self.nx,self.ny
-        N = nx*ny
-        sigma = self.sigma
-        
-        # loop over all cells to construct system of equations
-
-        Coef = lil_matrix((N,N))
-        rhs = np.zeros(N)
-
-        for iy in range(ny):
-            for ix in range(nx):
-
-                I = iy*nx+ix # vectorized index
-
-                # set Dirichlet BC on cells with a not nan potential
-                if not np.isnan(self.pot[iy,ix]):
-                    Coef[I,I] = 1
-                    rhs[I] = self.pot[iy,ix]
-                    continue
-
-                # don't calculate the potential in isolator regions
-                if sigma[iy,ix,0] == 0.0:
-                    Coef[I,I] = 1
-                    continue
-
-                # helper function to set the coefficients
-                def addCoeffDiff(a,ix1,iy1,ix2,iy2,sigmacomp):
-                    if 0 > iy1 or iy1 > ny-1 or 0 > ix1 or ix1 > nx-1: return
-                    if 0 > iy2 or iy2 > ny-1 or 0 > ix2 or ix2 > nx-1: return
-                    sigma_ = (sigma[iy1,ix1,sigmacomp] + sigma[iy2,ix2,sigmacomp])/2
-                    h = self.dy*(iy2-iy1) + self.dx*(ix2-ix1)
-                    Coef[I,iy1*nx+ix1] -= a*sigma_/h
-                    Coef[I,iy2*nx+ix2] += a*sigma_/h
-
-                # from left
+                # from the left
                 if ix>0:
-                    # isotropic
-                    addCoeffDiff( self.dy,   ix, iy, ix-1, iy , 0)
-                    # anisotropic
-                    addCoeffDiff( self.dy/4, ix,   iy, ix,   iy+1 , 2 )
-                    addCoeffDiff( self.dy/4, ix,   iy, ix,   iy-1 , 2 )
-                    addCoeffDiff( self.dy/4, ix-1, iy, ix-1, iy+1 , 2 )
-                    addCoeffDiff( self.dy/4, ix-1, iy, ix-1, iy-1 , 2 )
+                    conductivity = self.conductivityBetween(ix,iy,ix-1,iy)
+                    Cxx = conductivity[0,0] * self.dy/self.dx
+                    Coef[I,ID(-1,0)] -= Cxx
+                    Coef[I,ID( 0,0)] += Cxx
+                    if isAnisotropic:
+                        Cxy = (1/4)*conductivity[1,0] * self.dy/self.dy
+                        if iy < ny-1:
+                            Coef[I,ID( 0, 0)] -= Cxy
+                            Coef[I,ID( 0, 1)] += Cxy
+                            Coef[I,ID(-1, 0)] -= Cxy
+                            Coef[I,ID(-1, 1)] += Cxy
+                        if iy > 0:
+                            Coef[I,ID( 0,-1)] -= Cxy
+                            Coef[I,ID( 0, 0)] += Cxy
+                            Coef[I,ID(-1,-1)] -= Cxy
+                            Coef[I,ID(-1, 0)] += Cxy
 
                 # from right
                 if ix<nx-1:
-                    # isotropic
-                    addCoeffDiff(-self.dy, ix, iy, ix+1, iy , 0)
-                    # anisotropic
-                    addCoeffDiff(-self.dy/4, ix,   iy, ix,   iy+1 , 2 )
-                    addCoeffDiff(-self.dy/4, ix,   iy, ix,   iy-1 , 2 )
-                    addCoeffDiff(-self.dy/4, ix+1, iy, ix+1, iy+1 , 2 )
-                    addCoeffDiff(-self.dy/4, ix+1, iy, ix+1, iy-1 , 2 )
+                    conductivity = self.conductivityBetween(ix,iy,ix+1,iy)
+                    Cxx = conductivity[0,0] *self.dy/self.dx
+                    Coef[I,ID(0,0)]+= Cxx
+                    Coef[I,ID(1,0)]-= Cxx
+                    if isAnisotropic:
+                        Cxy = (1/4)*conductivity[1,0] * self.dy/self.dy
+                        if iy < ny-1:
+                            Coef[I,ID( 0, 0)] += Cxy
+                            Coef[I,ID( 0, 1)] -= Cxy
+                            Coef[I,ID(+1, 0)] += Cxy
+                            Coef[I,ID(+1, 1)] -= Cxy
+                        if iy > 0:
+                            Coef[I,ID( 0,-1)] += Cxy
+                            Coef[I,ID( 0, 0)] -= Cxy
+                            Coef[I,ID(+1,-1)] += Cxy
+                            Coef[I,ID(+1, 0)] -= Cxy
 
                 # from below
                 if iy>0:
-                    # isotropic
-                    addCoeffDiff( self.dx, ix, iy-1, ix, iy , 1)
-                    # anisotropic
-                    addCoeffDiff( self.dx/4, ix, iy,   ix+1, iy   , 3 )
-                    addCoeffDiff( self.dx/4, ix, iy,   ix-1, iy   , 3 )
-                    addCoeffDiff( self.dx/4, ix, iy-1, ix+1, iy-1 , 3 )
-                    addCoeffDiff( self.dx/4, ix, iy-1, ix-1, iy-1 , 3 )
+                    conductivity = self.conductivityBetween(ix,iy,ix,iy-1)
+                    Cyy = conductivity[1,1] * self.dx/self.dy
+                    Coef[I,ID(0,-1)] -= Cyy
+                    Coef[I,ID(0, 0)] += Cyy
+                    if isAnisotropic:
+                        Cyx = (1/4)*conductivity[0,1] * self.dx/self.dx
+                        if ix < nx-1:
+                            Coef[I,ID( 0, 0)] -= Cyx
+                            Coef[I,ID( 1, 0)] += Cyx
+                            Coef[I,ID( 0,-1)] -= Cyx
+                            Coef[I,ID( 1,-1)] += Cyx
+                        if ix > 0:
+                            Coef[I,ID(-1, 0)] -= Cyx
+                            Coef[I,ID( 0, 0)] += Cyx
+                            Coef[I,ID(-1,-1)] -= Cyx
+                            Coef[I,ID( 0,-1)] += Cyx
 
                 # from above
                 if iy<ny-1:
-                    # isotropic
-                    addCoeffDiff(-self.dx, ix, iy+1, ix, iy , 1)
-                    # anisotropic
-                    addCoeffDiff(-self.dx/4, ix, iy,   ix+1, iy   , 3 )
-                    addCoeffDiff(-self.dx/4, ix, iy,   ix-1, iy   , 3 )
-                    addCoeffDiff(-self.dx/4, ix, iy+1, ix+1, iy+1 , 3 )
-                    addCoeffDiff(-self.dx/4, ix, iy+1, ix-1, iy+1 , 3 )
+                    conductivity = self.conductivityBetween(ix,iy,ix,iy+1)
+                    Cyy = conductivity[1,1] * self.dx/self.dy
+                    Coef[I,ID(0,0)] += Cyy
+                    Coef[I,ID(0,1)] -= Cyy
+                    if isAnisotropic:
+                        Cyx = (1/4)*conductivity[0,1] * self.dx/self.dx
+                        if ix < nx-1:
+                            Coef[I,ID( 0, 0)] += Cyx
+                            Coef[I,ID( 1, 0)] -= Cyx
+                            Coef[I,ID( 0, 1)] += Cyx
+                            Coef[I,ID( 1, 1)] -= Cyx
+                        if ix > 0:
+                            Coef[I,ID(-1, 0)] += Cyx
+                            Coef[I,ID( 0, 0)] -= Cyx
+                            Coef[I,ID(-1, 1)] += Cyx
+                            Coef[I,ID( 0, 1)] -= Cyx
 
         # solve the system of equations
         Coef = Coef.tocsr()
-        print("Solve system")
         ti = time.time()
         phi_RAW = spsolve(Coef,rhs)
         tf = time.time()
@@ -265,24 +171,71 @@ class PoissonAnisotropic():
         phi = phi_RAW.reshape(ny,nx)
         return phi
 
-    ############################################################################
 
     def calcCurrent(self,phi=None):
-        sigma = self.sigma
         if phi is None:
             phi = self.calcPotential()
-        jx = 0*sigma[:,:,0]
-        jy = 0*sigma[:,:,0]
-        dphidy,dphidx = np.gradient(phi,self.dy,self.dx)
-        jx = sigma[:,:,0]*dphidx + sigma[:,:,2]*dphidy
-        jy = sigma[:,:,1]*dphidy + sigma[:,:,3]*dphidx
-        return jx,jy
+
+        nx,ny=self.nx,self.ny
+
+        def fd(ix1,iy1,ix2,iy2):
+            if 0 > iy1 or iy1 > ny-1 or 0 > ix1 or ix1 > nx-1: return 0.0
+            if 0 > iy2 or iy2 > ny-1 or 0 > ix2 or ix2 > nx-1: return 0.0
+            h = self.dy*(iy2-iy1) + self.dx*(ix2-ix1)
+            return (phi[iy2,ix2] - phi[iy1,ix1])/h
+
+        # current density buffer
+        Jx = 0*phi
+        Jy = 0*phi
+
+        for iy in range(ny):
+            for ix in range(nx):
+                jx,jy = 0.0,0.0
+
+                if ix>0:
+                    conductivity = self.conductivityBetween(ix,iy,ix-1,iy)
+                    DIV = 8 if ( 0 < iy < ny -1 ) else 4 # TODO: check why this is necessary?
+                    jx += conductivity[0,0]*fd( ix   , iy , ix-1 , iy   )/2    # isotropic
+                    jx += conductivity[1,0]*fd( ix-1 , iy , ix-1 , iy-1 )/DIV  # anisotropic
+                    jx += conductivity[1,0]*fd( ix-1 , iy , ix-1 , iy+1 )/DIV
+                    jx += conductivity[1,0]*fd( ix   , iy , ix   , iy-1 )/DIV
+                    jx += conductivity[1,0]*fd( ix   , iy , ix   , iy+1 )/DIV
+
+                if ix<nx-1:
+                    conductivity = self.conductivityBetween(ix,iy,ix+1,iy)
+                    DIV = 8 if ( 0 < iy < ny -1 ) else 4
+                    jx += conductivity[0,0]*fd( ix   , iy , ix+1 , iy   )/2    # isotropic
+                    jx += conductivity[1,0]*fd( ix   , iy , ix   , iy-1 )/DIV  # anisotropic
+                    jx += conductivity[1,0]*fd( ix   , iy , ix   , iy+1 )/DIV
+                    jx += conductivity[1,0]*fd( ix+1 , iy , ix+1 , iy-1 )/DIV
+                    jx += conductivity[1,0]*fd( ix+1 , iy , ix+1 , iy+1 )/DIV
+
+                if iy>0:
+                    conductivity = self.conductivityBetween(ix,iy,ix,iy-1)
+                    DIV = 8 if ( 0 < ix < nx-1 ) else 4
+                    jy += conductivity[1,1]*fd( ix , iy   , ix   , iy-1 )/2    # isotropic
+                    jy += conductivity[0,1]*fd( ix , iy-1 , ix-1 , iy-1 )/DIV  # anisotropic
+                    jy += conductivity[0,1]*fd( ix , iy-1 , ix+1 , iy-1 )/DIV
+                    jy += conductivity[0,1]*fd( ix , iy   , ix-1 , iy   )/DIV
+                    jy += conductivity[0,1]*fd( ix , iy   , ix-1 , iy   )/DIV
+
+                if iy<ny-1:
+                    conductivity = self.conductivityBetween(ix,iy,ix,iy+1)
+                    DIV = 8 if ( 0 < ix < nx-1 ) else 4
+                    jy += conductivity[1,1]*fd( ix , iy   , ix   , iy+1 ) /2   # isotropic
+                    jy += conductivity[0,1]*fd( ix , iy   , ix+1 , iy   )/DIV  # anisotropic
+                    jy += conductivity[0,1]*fd( ix , iy   , ix+1 , iy   )/DIV
+                    jy += conductivity[0,1]*fd( ix , iy+1 , ix-1 , iy+1 )/DIV
+                    jy += conductivity[0,1]*fd( ix , iy+1 , ix+1 , iy+1 )/DIV
+
+                Jx[iy,ix] = jx
+                Jy[iy,ix] = jy
+        
+        return Jx,Jy
 
     ############################################################################
 
-    def solve(self):
-        plt.figure(figsize=(15,8))
-
+    def solve(self, visualize=True):
         phi   = self.calcPotential()
         jx,jy = self.calcCurrent(phi)
         j     = np.sqrt(jx**2+jy**2)
@@ -291,43 +244,14 @@ class PoissonAnisotropic():
         jx[appliedPotRegion] = np.nan
         jy[appliedPotRegion] = np.nan
 
-        plt.subplot(121,title='Potential')
-        plt.imshow(phi,extent=self.extent,cmap = 'RdBu',origin='lower')
-        plt.contourf(self.xgrid,self.ygrid,phi,20,cmap = 'RdBu')
-        plt.streamplot(self.xgrid,self.ygrid,jx,jy,color='gray')
-
-        plt.subplot(122,title='Current density')
-        plt.grid(False)
-
-        cmap = plt.cm.magma
-        cmap.set_bad('gray',0.8)
-        
-        plt.imshow(j,cmap=cmap,vmin=0,origin='lower',extent=self.extent)
-        plt.streamplot(self.xgrid,self.ygrid,jx,jy,color='gray')
-        plt.quiver(self.xgrid,self.ygrid,jx,jy,color='k')
-
-        plt.show()
+        if visualize:
+            cmap = plt.cm.magma
+            cmap.set_bad('gray',0.8)
+            plt.figure(figsize=(15,8))
+            plt.grid(False)
+            plt.imshow(j,cmap=cmap,vmin=0,origin='lower',extent=self.extent)
+            plt.streamplot(self.xgrid,self.ygrid,jx,jy,color='lightslategray',density=1,linewidth=1)
+            plt.quiver(self.xgrid,self.ygrid,jx/j,jy/j,color='k',pivot='middle',alpha=0.4)
+            plt.show()
 
         return phi,jx,jy
-
-
-def example():
-    p = PoissonAnisotropic( nx=70, ny=50, xrange=[-0.7,0.7], yrange=[0.,1.], sigma=[1,1,0.8,-0.8])
-    
-    # Let's use the same contact points as in example 1
-    region = lambda x,y: -0.55<x<-0.5  and 0.2<y<0.8
-    p.setPotential(regionFunc=region, U=1.0)
-    region = lambda x,y:  0.5 <x<0.55 and 0.2<y<0.8
-    p.setPotential(regionFunc=region, U=-1.0)
-    
-    #Create rectangular region in the center with a low conductivity
-    #(you can also set it to zero to have an isolating material at the center)
-    #sigmaCenter = [0.7,0,0.1]
-    #region = lambda x,y: x<-0.65 or x >0.65 or y<0.1 or y >0.9
-    #region = lambda x,y: -0.1 < x < 0.1 and 0.3 < y < 0.7
-    #p.setSigma(regionFunc=region, sigma=[0.001,0.001,0.001,0.001])
-    
-    #p.showCurrent(quiverColor='black',streamplotColor='gray')
-    p.solve()
-
-#example()
