@@ -25,14 +25,14 @@ def readovf(filename):
     return data, meta
 
 
-def AMRconductivity(m,conductivity0 = 1.0 ,AMRratio = 0.0):
+def AMRconductivity(m, conductivity0 = 1.0, AMRratio = 0.0):
     """ calculate amr conductivity for the magnetization m """
     X,Y,Z = 0,1,2
-    ny,nx,_ = m.shape
-    AMR = np.zeros((ny,nx,3,3))
+    nz,ny,nx,_ = m.shape
+    AMR = np.zeros((nz,ny,nx,3,3))
     f = (6*AMRratio)/(6+AMRratio)
     for a in [X,Y,Z]:
-        AMR[:,:,a,a] += 1 + f/3 
+        AMR[:,:,:,a,a] += 1 + f/3 
         for b in [X,Y,Z]:
-            AMR[:,:,a,b] -= f*m[:,:,a]*m[:,:,b]
+            AMR[:,:,:,a,b] -= f*m[:,:,:,a]*m[:,:,:,b]
     return conductivity0*AMR
