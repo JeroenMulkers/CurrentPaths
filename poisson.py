@@ -75,16 +75,15 @@ class Poisson():
         rhs[I] = self.pot[not_nan_values[:, 0], not_nan_values[:, 1]]
         Coef[I, I] = 1
 
+        # don't calculate the potential in isolator regions
+        nonzero = np.argwhere(self.conductivity == 0)
+        Coef[nonzero[:, 0], nonzero[:, 1]] = 1
+
         for iy in range(ny):
             for ix in range(nx):
 
                 I = iy*nx+ix # vectorized index
                 ID = lambda x,y: (iy+y)*nx+(ix+x)
-
-                # don't calculate the potential in isolator regions
-                if np.count_nonzero(self.conductivity[iy,ix]) == 0:
-                    Coef[I,I] = 1
-                    continue
 
                 # from the left
                 if ix>0:
@@ -123,7 +122,6 @@ class Poisson():
                             Coef[I,ID( 0, 0)] -= Cxy
                             Coef[I,ID(+1,-1)] += Cxy
                             Coef[I,ID(+1, 0)] -= Cxy
-
 
                 # from below
                 if iy>0:
