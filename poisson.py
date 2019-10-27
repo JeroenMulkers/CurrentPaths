@@ -11,18 +11,19 @@ class Poisson():
 
     def __init__(self, gridsize, xrange=[0.,1.], yrange=[0.,1.], conductivity=np.array([[0,0],[0,0]])):
 
-        self.nx = gridsize[0]
-        self.ny = gridsize[1]
+        self.nx, self.ny = gridsize
         self.dx = (xrange[1]-xrange[0])/self.nx
         self.dy = (yrange[1]-yrange[0])/self.ny
         self.extent = [xrange[0],xrange[1],yrange[0],yrange[1]]
-        x = np.linspace(xrange[0]+self.dx/2,xrange[1]-self.dx/2,self.nx)
-        y = np.linspace(yrange[0]+self.dy/2,yrange[1]-self.dy/2,self.ny)
-        self.xgrid, self.ygrid = np.meshgrid(x,y)
+        self.x = np.linspace(xrange[0]+self.dx/2,xrange[1]-self.dx/2,self.nx)
+        self.y = np.linspace(yrange[0]+self.dy/2,yrange[1]-self.dy/2,self.ny)
+        self.xgrid, self.ygrid = np.meshgrid(self.x,self.y)
 
         self.conductivity = np.zeros((self.ny,self.nx,2,2))
         self.conductivity[:,:] = conductivity
         self.pot = np.nan*np.ones((self.ny,self.nx))
+
+        self.isAnisotropic = self.isAnisotropic()
 
 
     def __setRegionValue(self, field, value, regionFunc):
@@ -123,6 +124,7 @@ class Poisson():
                             Coef[I,ID( 0, 0)] -= Cxy
                             Coef[I,ID(+1,-1)] += Cxy
                             Coef[I,ID(+1, 0)] -= Cxy
+
 
                 # from below
                 if iy>0:
@@ -230,7 +232,7 @@ class Poisson():
 
                 Jx[iy,ix] = jx
                 Jy[iy,ix] = jy
-        
+
         return Jx,Jy
 
     ############################################################################
