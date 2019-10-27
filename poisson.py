@@ -23,8 +23,6 @@ class Poisson():
         self.conductivity[:,:] = conductivity
         self.pot = np.nan*np.ones((self.ny,self.nx))
 
-        self.isAnisotropic = self.isAnisotropic()
-
 
     def __setRegionValue(self, field, value, regionFunc):
         for ix in range(self.nx):
@@ -66,21 +64,22 @@ class Poisson():
         isAnisotropic = self.isAnisotropic() # avoid checking it every time
         nx,ny = self.nx,self.ny
         Ncells = nx*ny
-        
+
         # loop over all cells to construct system of equations
         Coef = lil_matrix((Ncells,Ncells))
         rhs = np.zeros(Ncells)
+
+        # set Dirichlet BC on cells with a not nan potential
+        not_nan_values = np.argwhere(np.isnan(self.pot)-1)
+        I = not_nan_values[:, 0]*nx + not_nan_values[:, 1]
+        rhs[I] = self.pot[not_nan_values[:, 0], not_nan_values[:, 1]]
+        Coef[I, I] = 1
+
         for iy in range(ny):
             for ix in range(nx):
 
                 I = iy*nx+ix # vectorized index
                 ID = lambda x,y: (iy+y)*nx+(ix+x)
-
-                # set Dirichlet BC on cells with a not nan potential
-                if not np.isnan(self.pot[iy,ix]):
-                    Coef[I,I] = 1
-                    rhs[I] = self.pot[iy,ix]
-                    continue
 
                 # don't calculate the potential in isolator regions
                 if np.count_nonzero(self.conductivity[iy,ix]) == 0:
