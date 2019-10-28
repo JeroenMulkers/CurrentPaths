@@ -11,14 +11,13 @@ class Poisson():
 
     def __init__(self, gridsize, xrange=[0.,1.], yrange=[0.,1.], conductivity=np.array([[0,0],[0,0]])):
 
-        self.nx = gridsize[0]
-        self.ny = gridsize[1]
+        self.nx, self.ny = gridsize
         self.dx = (xrange[1]-xrange[0])/self.nx
         self.dy = (yrange[1]-yrange[0])/self.ny
         self.extent = [xrange[0],xrange[1],yrange[0],yrange[1]]
-        x = np.linspace(xrange[0]+self.dx/2,xrange[1]-self.dx/2,self.nx)
-        y = np.linspace(yrange[0]+self.dy/2,yrange[1]-self.dy/2,self.ny)
-        self.xgrid, self.ygrid = np.meshgrid(x,y)
+        self.x = np.linspace(xrange[0]+self.dx/2,xrange[1]-self.dx/2,self.nx)
+        self.y = np.linspace(yrange[0]+self.dy/2,yrange[1]-self.dy/2,self.ny)
+        self.xgrid, self.ygrid = np.meshgrid(self.x,self.y)
 
         self.conductivity = np.zeros((self.ny,self.nx,2,2))
         self.conductivity[:,:] = conductivity
@@ -65,26 +64,26 @@ class Poisson():
         isAnisotropic = self.isAnisotropic() # avoid checking it every time
         nx,ny = self.nx,self.ny
         Ncells = nx*ny
-        
+
         # loop over all cells to construct system of equations
         Coef = lil_matrix((Ncells,Ncells))
         rhs = np.zeros(Ncells)
+
+        # set Dirichlet BC on cells with a not nan potential
+        not_nan_values = np.argwhere(np.isnan(self.pot)-1)
+        I = not_nan_values[:, 0]*nx + not_nan_values[:, 1]
+        rhs[I] = self.pot[not_nan_values[:, 0], not_nan_values[:, 1]]
+        Coef[I, I] = 1
+
+        # don't calculate the potential in isolator regions
+        nonzero = np.argwhere(self.conductivity == 0)
+        Coef[nonzero[:, 0], nonzero[:, 1]] = 1
+
         for iy in range(ny):
             for ix in range(nx):
 
                 I = iy*nx+ix # vectorized index
                 ID = lambda x,y: (iy+y)*nx+(ix+x)
-
-                # set Dirichlet BC on cells with a not nan potential
-                if not np.isnan(self.pot[iy,ix]):
-                    Coef[I,I] = 1
-                    rhs[I] = self.pot[iy,ix]
-                    continue
-
-                # don't calculate the potential in isolator regions
-                if np.count_nonzero(self.conductivity[iy,ix]) == 0:
-                    Coef[I,I] = 1
-                    continue
 
                 # from the left
                 if ix>0:
@@ -230,7 +229,7 @@ class Poisson():
 
                 Jx[iy,ix] = jx
                 Jy[iy,ix] = jy
-        
+
         return Jx,Jy
 
     ############################################################################
